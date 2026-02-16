@@ -1,0 +1,356 @@
+"""
+COUNTERPLAY
+Competitive Creative Intelligence
+
+A free tool for marketers to analyze competitive advertising landscapes.
+Built by Anshul Sinha.
+"""
+
+import streamlit as st
+from datetime import datetime
+
+from scraper.meta import fetch_landscape
+from analysis.engine import run_full_analysis
+from output.pdf_generator import generate_pdf
+from config import MARKETS
+from usage import get_usage, increment_usage, can_use, validate_email, FREE_TIER_LIMIT
+
+
+# ── Page config ───────────────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Counterplay — Competitive Creative Intelligence",
+    page_icon="⚔️",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
+
+# ── Custom CSS ────────────────────────────────────────────────────────
+
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+    .stApp {
+        font-family: 'Inter', sans-serif;
+    }
+
+    .main-header {
+        font-size: 2.8rem;
+        font-weight: 700;
+        color: #1a1a2e;
+        margin-bottom: 0;
+        letter-spacing: -1px;
+    }
+
+    .sub-header {
+        font-size: 1.1rem;
+        color: #6b7280;
+        margin-top: -8px;
+        margin-bottom: 24px;
+    }
+
+    .accent-line {
+        width: 60px;
+        height: 4px;
+        background: #e94560;
+        margin: 8px 0 20px 0;
+        border-radius: 2px;
+    }
+
+    .brand-pill {
+        display: inline-block;
+        background: #1a1a2e;
+        color: white;
+        padding: 4px 14px;
+        border-radius: 16px;
+        font-size: 0.85rem;
+        margin-right: 6px;
+        font-weight: 600;
+    }
+
+    .status-box {
+        background: #f0fdf4;
+        border-left: 4px solid #22c55e;
+        padding: 12px 16px;
+        border-radius: 0 8px 8px 0;
+        margin: 12px 0;
+    }
+
+    .warning-box {
+        background: #fefce8;
+        border-left: 4px solid #eab308;
+        padding: 12px 16px;
+        border-radius: 0 8px 8px 0;
+        margin: 12px 0;
+    }
+
+    div[data-testid="stSidebar"] {
+        background: #fafafa;
+    }
+
+    .stDownloadButton > button {
+        background: #e94560 !important;
+        color: white !important;
+        border: none !important;
+        font-weight: 600 !important;
+        padding: 8px 24px !important;
+        border-radius: 8px !important;
+    }
+
+    .stDownloadButton > button:hover {
+        background: #d63851 !important;
+    }
+
+    section[data-testid="stSidebar"] .stTextInput input {
+        font-size: 0.85rem;
+    }
+
+    .footer-text {
+        text-align: center;
+        color: #9ca3af;
+        font-size: 0.8rem;
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid #e5e7eb;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Sidebar: user identification ─────────────────────────────────────
+
+with st.sidebar:
+    st.markdown("### ⚙️ Configuration")
+    st.markdown("---")
+
+    user_email = st.text_input(
+        "Your Email",
+        placeholder="you@company.com",
+        help="Used to track your free analysis quota.",
+    )
+
+    # Show usage info if a valid email is entered
+    if user_email and validate_email(user_email):
+        usage_info = get_usage(user_email)
+        used = usage_info["usage_count"]
+        remaining = usage_info["remaining"]
+
+        st.caption(f"**{used}** of **{FREE_TIER_LIMIT}** free analyses used")
+        st.progress(min(used / FREE_TIER_LIMIT, 1.0))
+
+        if 0 < remaining <= 20:
+            st.warning(f"Only {remaining} free analyses remaining.")
+        elif remaining <= 0:
+            st.error("Free tier exhausted. Contact us for continued access.")
+
+    st.markdown("---")
+    st.markdown(
+        '<p style="color: #9ca3af; font-size: 0.75rem;">Built by '
+        '<a href="https://linkedin.com/in/anshul-sinha-7bb3b7101" target="_blank">'
+        'Anshul Sinha</a></p>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Main content ──────────────────────────────────────────────────────
+
+st.markdown('<h1 class="main-header">COUNTERPLAY</h1>', unsafe_allow_html=True)
+st.markdown('<div class="accent-line"></div>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="sub-header">'
+    'Competitive creative intelligence for marketers. '
+    'Analyze what your competitors are running, how they differ, and where the gaps are.'
+    '</p>',
+    unsafe_allow_html=True,
+)
+
+
+# ── Input form ────────────────────────────────────────────────────────
+
+with st.container():
+    col1, col2 = st.columns(2)
+
+    with col1:
+        market = st.selectbox(
+            "Market",
+            options=list(MARKETS.keys()),
+            index=0,
+            help="Which country's ad landscape do you want to analyze?",
+        )
+
+    with col2:
+        category = st.text_input(
+            "Category",
+            placeholder="e.g. Quick Commerce, D2C Skincare, Fintech",
+            help="What category or vertical are these brands in?",
+        )
+
+    st.markdown("##### Brands to analyze (2-3)")
+    brand_cols = st.columns(3)
+
+    brands = []
+    for i, col in enumerate(brand_cols):
+        with col:
+            brand = st.text_input(
+                f"Brand {i+1}",
+                placeholder=f"Brand name",
+                key=f"brand_{i}",
+                label_visibility="collapsed",
+            )
+            if brand.strip():
+                brands.append(brand.strip())
+
+    # Validation
+    can_run = True
+    if len(brands) < 2:
+        can_run = False
+    if not category:
+        can_run = False
+    if not user_email or not validate_email(user_email):
+        can_run = False
+    elif not can_use(user_email):
+        can_run = False
+
+    run_button = st.button(
+        "⚔️ Run Counterplay",
+        type="primary",
+        disabled=not can_run,
+        use_container_width=True,
+    )
+
+    if not can_run:
+        missing = []
+        if len(brands) < 2:
+            missing.append("at least 2 brand names")
+        if not category:
+            missing.append("a category")
+        if not user_email:
+            missing.append("your email address (sidebar)")
+        elif not validate_email(user_email):
+            missing.append("a valid email address")
+        elif not can_use(user_email):
+            missing.append("free tier quota (exhausted)")
+        if missing:
+            st.caption(f"Need: {', '.join(missing)}")
+
+
+# ── Analysis execution ────────────────────────────────────────────────
+
+if run_button and can_run:
+    country_code = MARKETS[market]
+
+    st.markdown("---")
+
+    with st.status("Running Counterplay analysis...", expanded=True) as status:
+
+        # Step 1: Fetch ads
+        st.write(f"🔍 Fetching ads from Meta Ad Library for {len(brands)} brands in {market}... (this may take 30-60s per brand)")
+        try:
+            ads_by_brand = fetch_landscape(
+                brands=brands,
+                country_code=country_code,
+                ads_per_brand=50,
+            )
+        except Exception as e:
+            st.error(f"Failed to fetch ads: {str(e)}")
+            st.stop()
+
+        # Show fetch results
+        total_ads = sum(len(v) for v in ads_by_brand.values())
+        for brand, ads in ads_by_brand.items():
+            st.write(f"  → {brand}: {len(ads)} active ads found")
+
+        if total_ads == 0:
+            st.error(
+                "No ads found for any brand. Check that the brand names match "
+                "their Meta/Facebook page names. The Ad Library may also be "
+                "temporarily rate-limiting requests — try again in a minute."
+            )
+            st.stop()
+
+        # Step 2: Run analysis
+        st.write("🧠 Analyzing creative strategies with Claude...")
+        try:
+            results = run_full_analysis(
+                brands=brands,
+                country_code=country_code,
+                market_name=market,
+                category=category,
+                ads_by_brand=ads_by_brand,
+            )
+        except Exception as e:
+            st.error(f"Analysis failed: {str(e)}")
+            st.stop()
+
+        # Step 3: Generate PDF
+        st.write("📄 Generating landscape brief...")
+        try:
+            pdf_bytes = generate_pdf(results)
+        except Exception as e:
+            st.error(f"PDF generation failed: {str(e)}")
+            pdf_bytes = None
+
+        # Increment usage counter after successful analysis
+        increment_usage(user_email)
+
+        status.update(label="Analysis complete!", state="complete", expanded=False)
+
+    # ── Results display ───────────────────────────────────────────────
+
+    st.markdown("---")
+    st.markdown("## 📊 Landscape Brief")
+
+    # Download button
+    if pdf_bytes:
+        filename = (
+            f"counterplay_{category.lower().replace(' ', '-')}"
+            f"_{market.lower().replace(' ', '-')}"
+            f"_{datetime.now().strftime('%Y%m%d')}.pdf"
+        )
+        st.download_button(
+            label="⬇️ Download Full PDF Report",
+            data=pdf_bytes,
+            file_name=filename,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+    st.markdown("---")
+
+    # Overview stats
+    st.markdown("### Snapshot")
+    stat_cols = st.columns(len(brands))
+    for i, brand in enumerate(brands):
+        data = results["brand_data"].get(brand, {})
+        ads = data.get("ads", [])
+        clfs = data.get("classifications", [])
+        with stat_cols[i]:
+            st.metric(label=brand, value=f"{len(ads)} ads")
+            if clfs:
+                offers = sum(1 for c in clfs if c.get("has_offer"))
+                st.caption(f"Offer rate: {offers/len(clfs)*100:.0f}%")
+
+    st.markdown("---")
+
+    # Brand profiles
+    st.markdown("### Brand Profiles")
+    for brand, profile in results["brand_profiles"].items():
+        with st.expander(f"**{brand}**", expanded=True):
+            st.markdown(profile)
+
+    st.markdown("---")
+
+    # Landscape brief
+    st.markdown("### Competitive Landscape")
+    st.markdown(results["landscape_brief"])
+
+    # Footer
+    st.markdown(
+        '<p class="footer-text">'
+        'COUNTERPLAY — Competitive Creative Intelligence<br>'
+        'Built by <a href="https://linkedin.com/in/anshul-sinha-7bb3b7101" '
+        'target="_blank">Anshul Sinha</a>'
+        '</p>',
+        unsafe_allow_html=True,
+    )
