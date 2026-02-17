@@ -20,6 +20,22 @@ from reportlab.platypus import (
     Table,
     TableStyle,
     HRFlowable,
+    KeepTogether,
+)
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from output.charts import (
+    archetype_distribution_chart,
+    funnel_stage_chart,
+    message_lever_heatmap,
+    creative_freshness_histogram,
+    cta_type_chart,
+    strategic_positioning_scatter,
+    select_sample_ads,
+    fig_to_image_flowable,
 )
 
 
@@ -229,6 +245,54 @@ def _convert_inline_markdown(text: str) -> str:
     return text
 
 
+def _build_ad_card(sample: dict, styles) -> list:
+    """Build a sample ad preview card as ReportLab flowables."""
+    elements = []
+    body = (sample.get("body_text") or "")[:120]
+    if len(sample.get("body_text") or "") > 120:
+        body += "..."
+    title = sample.get("title") or ""
+    archetype = sample.get("creative_archetype") or ""
+    funnel = sample.get("funnel_stage") or ""
+    media = sample.get("media_type") or ""
+    tone = sample.get("emotional_tone") or ""
+    snap_url = sample.get("snapshot_url") or ""
+
+    tags = " | ".join(filter(None, [media, archetype, funnel, tone]))
+
+    card_content = []
+    if title:
+        card_content.append([Paragraph(f"<b>{title}</b>", styles["Body"])])
+    if body:
+        card_content.append([Paragraph(body, styles["Body"])])
+    if tags:
+        card_content.append([Paragraph(
+            f'<font size="8" color="{SUBTLE.hexval()}">{tags}</font>',
+            styles["Body"],
+        )])
+    if snap_url:
+        card_content.append([Paragraph(
+            f'<font size="8" color="{ACCENT.hexval()}"><a href="{snap_url}">View in Ad Library</a></font>',
+            styles["Body"],
+        )])
+
+    if card_content:
+        card = Table(card_content, colWidths=[430])
+        card.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), LIGHT_BG),
+            ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+            ("BOX", (0, 0), (-1, -1), 0.5, HexColor("#d1d5db")),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        elements.append(card)
+        elements.append(Spacer(1, 6))
+
+    return elements
+
+
 def _build_stats_row(brand_data: dict, styles) -> list:
     """Build a stats summary row for the overview section."""
     elements = []
@@ -352,6 +416,44 @@ def generate_pdf(analysis: dict) -> bytes:
     story.extend(_build_stats_row(analysis["brand_data"], styles))
     story.append(Spacer(1, 16))
 
+    # ── Visual analytics charts ──────────────────────────────────────
+
+    chart_funcs = [
+        ("Creative Archetype Distribution", archetype_distribution_chart),
+        ("Funnel Stage Balance", funnel_stage_chart),
+        ("Message Lever Heatmap", message_lever_heatmap),
+    ]
+
+    for title, chart_func in chart_funcs:
+        try:
+            fig = chart_func(analysis["brand_data"])
+            story.append(Spacer(1, 10))
+            story.append(fig_to_image_flowable(fig, width_inches=5.8))
+            plt.close(fig)
+            story.append(Spacer(1, 6))
+        except Exception:
+            plt.close("all")
+
+    story.append(PageBreak())
+
+    chart_funcs_2 = [
+        ("Creative Freshness", creative_freshness_histogram),
+        ("CTA Type Distribution", cta_type_chart),
+        ("Strategic Positioning Map", strategic_positioning_scatter),
+    ]
+
+    for title, chart_func in chart_funcs_2:
+        try:
+            fig = chart_func(analysis["brand_data"])
+            story.append(Spacer(1, 10))
+            story.append(fig_to_image_flowable(fig, width_inches=5.8))
+            plt.close(fig)
+            story.append(Spacer(1, 6))
+        except Exception:
+            plt.close("all")
+
+    story.append(PageBreak())
+
     # ── Individual brand profiles ─────────────────────────────────────
     story.append(Paragraph("BRAND PROFILES", styles["SectionHead"]))
     story.append(HRFlowable(
@@ -370,6 +472,20 @@ def generate_pdf(analysis: dict) -> bytes:
             ))
             story.append(Spacer(1, 6))
         story.extend(_markdown_to_paragraphs(profile, styles))
+
+        # Sample ad preview cards
+        try:
+            brand_ads = analysis["brand_data"].get(brand, {}).get("ads", [])
+            brand_clfs = analysis["brand_data"].get(brand, {}).get("classifications", [])
+            samples = select_sample_ads(brand_ads, brand_clfs, n=2)
+            if samples:
+                story.append(Spacer(1, 8))
+                story.append(Paragraph("SAMPLE ADS", styles["SubHead"]))
+                for s in samples:
+                    story.extend(_build_ad_card(s, styles))
+        except Exception:
+            pass
+
         story.append(Spacer(1, 12))
 
     story.append(PageBreak())

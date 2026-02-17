@@ -9,9 +9,22 @@ Built by Anshul Sinha.
 import streamlit as st
 from datetime import datetime
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 from scraper.meta import fetch_landscape
 from analysis.engine import run_full_analysis
 from output.pdf_generator import generate_pdf
+from output.charts import (
+    archetype_distribution_chart,
+    funnel_stage_chart,
+    message_lever_heatmap,
+    creative_freshness_histogram,
+    cta_type_chart,
+    strategic_positioning_scatter,
+    select_sample_ads,
+)
 from config import MARKETS
 from usage import get_usage, increment_usage, can_use, validate_email, FREE_TIER_LIMIT
 
@@ -114,6 +127,52 @@ st.markdown("""
         padding-top: 20px;
         border-top: 1px solid #e5e7eb;
     }
+
+    .ad-card {
+        border: 1px solid #374151;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+        background: #1e1e2e;
+    }
+
+    .ad-card .ad-body {
+        font-size: 0.85rem;
+        color: #d1d5db;
+        margin-bottom: 8px;
+        line-height: 1.4;
+    }
+
+    .ad-card .ad-title {
+        font-weight: 600;
+        color: #f3f4f6;
+        margin-bottom: 6px;
+        font-size: 0.9rem;
+    }
+
+    .ad-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        margin-right: 4px;
+        margin-top: 6px;
+        font-weight: 600;
+    }
+
+    .ad-badge.archetype { background: #3b1f2b; color: #e94560; }
+    .ad-badge.funnel { background: #1e293b; color: #60a5fa; }
+    .ad-badge.media { background: #1a2e1a; color: #4ade80; }
+    .ad-badge.tone { background: #2e2a1a; color: #fbbf24; }
+
+    .ad-card a {
+        color: #e94560;
+        font-size: 0.78rem;
+        text-decoration: none;
+        font-weight: 600;
+    }
+
+    .ad-card a:hover { text-decoration: underline; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -331,6 +390,39 @@ if run_button and can_run:
                 offers = sum(1 for c in clfs if c.get("has_offer"))
                 st.caption(f"Offer rate: {offers/len(clfs)*100:.0f}%")
 
+    # ── Visual analytics charts ─────────────────────────────────────
+    st.markdown("---")
+
+    st.markdown("### Creative Mix")
+    fig = archetype_distribution_chart(results["brand_data"])
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.markdown("### Funnel Balance")
+    fig = funnel_stage_chart(results["brand_data"])
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.markdown("### Message Levers")
+    fig = message_lever_heatmap(results["brand_data"])
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.markdown("### Creative Freshness")
+    fig = creative_freshness_histogram(results["brand_data"])
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.markdown("### CTA Distribution")
+    fig = cta_type_chart(results["brand_data"])
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.markdown("### Strategic Positioning")
+    fig = strategic_positioning_scatter(results["brand_data"])
+    st.pyplot(fig)
+    plt.close(fig)
+
     st.markdown("---")
 
     # Brand profiles
@@ -338,6 +430,38 @@ if run_button and can_run:
     for brand, profile in results["brand_profiles"].items():
         with st.expander(f"**{brand}**", expanded=True):
             st.markdown(profile)
+
+            # Sample ad preview cards
+            brand_ads = results["brand_data"].get(brand, {}).get("ads", [])
+            brand_clfs = results["brand_data"].get(brand, {}).get("classifications", [])
+            samples = select_sample_ads(brand_ads, brand_clfs, n=3)
+            if samples:
+                st.markdown("#### 📋 Sample Ads from Library")
+                for s in samples:
+                    body = (s.get("body_text") or "")[:150]
+                    if len(s.get("body_text") or "") > 150:
+                        body += "..."
+                    title = s.get("title") or ""
+                    archetype = s.get("creative_archetype") or ""
+                    funnel = s.get("funnel_stage") or ""
+                    media = s.get("media_type") or ""
+                    tone = s.get("emotional_tone") or ""
+                    snap_url = s.get("snapshot_url") or ""
+
+                    card_html = f"""
+                    <div class="ad-card">
+                        {f'<div class="ad-title">{title}</div>' if title else ''}
+                        <div class="ad-body">{body if body else '<i>No ad copy</i>'}</div>
+                        <div>
+                            {f'<span class="ad-badge media">{media}</span>' if media else ''}
+                            {f'<span class="ad-badge archetype">{archetype}</span>' if archetype else ''}
+                            {f'<span class="ad-badge funnel">{funnel}</span>' if funnel else ''}
+                            {f'<span class="ad-badge tone">{tone}</span>' if tone else ''}
+                        </div>
+                        {f'<div style="margin-top:8px"><a href="{snap_url}" target="_blank">View in Ad Library →</a></div>' if snap_url else ''}
+                    </div>
+                    """
+                    st.markdown(card_html, unsafe_allow_html=True)
 
     st.markdown("---")
 
