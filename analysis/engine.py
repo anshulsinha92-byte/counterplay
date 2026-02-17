@@ -213,35 +213,9 @@ Media types: {media_str}
 Platform distribution: {platform_str}{age_summary}"""
 
 
-def classify_ads(
-    ads: list[dict],
-    client: anthropic.Anthropic,
-    model: str = "claude-sonnet-4-20250514",
-) -> list[dict]:
-    """
-    Send ads to Claude for taxonomy classification.
-    Returns list of classification dicts.
-    """
-    if not ads:
-        return []
-
-    ads_text = _build_ad_text_block(ads)
-
-    prompt = CLASSIFY_PROMPT.format(
-        archetypes=json.dumps(CREATIVE_ARCHETYPES),
-        levers=json.dumps(MESSAGE_LEVERS),
-        funnel_stages=json.dumps(FUNNEL_STAGES),
-        production_quality=json.dumps(PRODUCTION_QUALITY),
-        ads_text=ads_text,
-    )
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    text = response.content[0].text.strip()
+def _parse_classification_response(text: str) -> list[dict]:
+    """Parse Claude's classification response, handling markdown fences and truncation."""
+    text = text.strip()
     # Clean potential markdown fences
     if text.startswith("```"):
         text = text.split("\n", 1)[1]
@@ -250,17 +224,71 @@ def classify_ads(
     text = text.strip()
 
     try:
-        classifications = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError:
         # Try to extract JSON array from response
         start = text.find("[")
         end = text.rfind("]") + 1
         if start >= 0 and end > start:
-            classifications = json.loads(text[start:end])
-        else:
-            classifications = []
+            try:
+                return json.loads(text[start:end])
+            except json.JSONDecodeError:
+                pass
 
-    return classifications
+        # Handle truncated JSON: try to fix incomplete array
+        if start >= 0:
+            fragment = text[start:]
+            # Find last complete object (ends with })
+            last_brace = fragment.rfind("}")
+            if last_brace > 0:
+                fixed = fragment[: last_brace + 1] + "]"
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
+
+        return []
+
+
+def classify_ads(
+    ads: list[dict],
+    client: anthropic.Anthropic,
+    model: str = "claude-sonnet-4-20250514",
+    batch_size: int = 15,
+) -> list[dict]:
+    """
+    Send ads to Claude for taxonomy classification.
+    Batches ads into groups to avoid token truncation.
+    Returns list of classification dicts.
+    """
+    if not ads:
+        return []
+
+    all_classifications = []
+
+    # Process ads in batches to avoid exceeding output token limits
+    for batch_start in range(0, len(ads), batch_size):
+        batch = ads[batch_start : batch_start + batch_size]
+        ads_text = _build_ad_text_block(batch, max_ads=batch_size)
+
+        prompt = CLASSIFY_PROMPT.format(
+            archetypes=json.dumps(CREATIVE_ARCHETYPES),
+            levers=json.dumps(MESSAGE_LEVERS),
+            funnel_stages=json.dumps(FUNNEL_STAGES),
+            production_quality=json.dumps(PRODUCTION_QUALITY),
+            ads_text=ads_text,
+        )
+
+        response = client.messages.create(
+            model=model,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        batch_clfs = _parse_classification_response(response.content[0].text)
+        all_classifications.extend(batch_clfs)
+
+    return all_classifications
 
 
 def generate_brand_profile(
