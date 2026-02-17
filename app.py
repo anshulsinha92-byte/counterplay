@@ -26,7 +26,18 @@ from output.charts import (
     select_sample_ads,
 )
 from config import MARKETS
-from usage import get_usage, increment_usage, can_use, validate_email, FREE_TIER_LIMIT
+from usage import (
+    get_usage,
+    increment_usage,
+    can_use,
+    validate_email,
+    is_approved,
+    approve_email,
+    remove_approved_email,
+    get_all_approved_users,
+    verify_admin_key,
+    ANALYSIS_LIMIT,
+)
 
 
 # ── Page config ───────────────────────────────────────────────────────
@@ -37,6 +48,14 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded",
 )
+
+
+# ── Admin mode detection ──────────────────────────────────────────────
+
+query_params = st.query_params
+admin_key = query_params.get("admin", "")
+is_admin = verify_admin_key(admin_key) if admin_key else False
+
 
 # ── Custom CSS ────────────────────────────────────────────────────────
 
@@ -173,8 +192,136 @@ st.markdown("""
     }
 
     .ad-card a:hover { text-decoration: underline; }
+
+    .access-box {
+        background: #fef3c7;
+        border: 1px solid #f59e0b;
+        border-radius: 10px;
+        padding: 20px 24px;
+        text-align: center;
+        margin: 24px 0;
+    }
+
+    .access-box h3 {
+        color: #92400e;
+        margin-bottom: 8px;
+    }
+
+    .access-box p {
+        color: #78350f;
+        font-size: 0.95rem;
+    }
+
+    .access-box a {
+        display: inline-block;
+        background: #0a66c2;
+        color: white !important;
+        padding: 8px 20px;
+        border-radius: 6px;
+        text-decoration: none;
+        font-weight: 600;
+        margin-top: 10px;
+    }
+
+    .access-box a:hover {
+        background: #084e96;
+    }
+
+    .admin-badge {
+        display: inline-block;
+        background: #dc2626;
+        color: white;
+        padding: 2px 10px;
+        border-radius: 10px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ADMIN PANEL
+# ══════════════════════════════════════════════════════════════════════
+
+if is_admin:
+    st.markdown(
+        '<h1 class="main-header">COUNTERPLAY <span class="admin-badge">ADMIN</span></h1>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="accent-line"></div>', unsafe_allow_html=True)
+    st.markdown("Manage approved users and monitor usage.")
+
+    st.markdown("---")
+
+    # ── Add new approved email ────────────────────────────────────────
+    st.markdown("### Add Approved User")
+    add_col1, add_col2 = st.columns([2, 1])
+    with add_col1:
+        new_email = st.text_input("Email to approve", placeholder="user@example.com")
+    with add_col2:
+        new_note = st.text_input("Note (optional)", placeholder="LinkedIn DM")
+
+    if st.button("Approve Email", type="primary"):
+        if not new_email or not validate_email(new_email):
+            st.error("Enter a valid email address.")
+        else:
+            added = approve_email(new_email, new_note)
+            if added:
+                st.success(f"Approved: {new_email.strip().lower()}")
+            else:
+                st.warning(f"Already approved: {new_email.strip().lower()}")
+            st.rerun()
+
+    st.markdown("---")
+
+    # ── Approved users table ──────────────────────────────────────────
+    st.markdown("### Approved Users")
+    users = get_all_approved_users()
+
+    if users:
+        st.caption(f"{len(users)} approved users")
+
+        for user in users:
+            col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
+            with col1:
+                st.markdown(f"**{user['email']}**")
+                if user["note"]:
+                    st.caption(user["note"])
+            with col2:
+                used = user["usage_count"]
+                st.markdown(f"**{used}/{ANALYSIS_LIMIT}** used")
+            with col3:
+                approved_dt = user["approved_at"][:10] if user["approved_at"] else "—"
+                last_use = user["last_use"][:10] if user["last_use"] else "never"
+                st.caption(f"Approved: {approved_dt} | Last use: {last_use}")
+            with col4:
+                if st.button("Remove", key=f"rm_{user['email']}"):
+                    remove_approved_email(user["email"])
+                    st.rerun()
+            st.markdown("---")
+    else:
+        st.info("No approved users yet. Add emails above.")
+
+    # Footer
+    st.markdown(
+        '<p class="footer-text">'
+        'COUNTERPLAY ADMIN PANEL<br>'
+        'Built by <a href="https://linkedin.com/in/anshul-sinha-7bb3b7101" '
+        'target="_blank">Anshul Sinha</a>'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+
+    st.stop()  # Don't render the main app when in admin mode
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MAIN APP (user-facing)
+# ══════════════════════════════════════════════════════════════════════
 
 
 # ── Sidebar: user identification ─────────────────────────────────────
@@ -186,22 +333,29 @@ with st.sidebar:
     user_email = st.text_input(
         "Your Email",
         placeholder="you@company.com",
-        help="Used to track your free analysis quota.",
+        help="Enter the email you were approved with.",
     )
 
-    # Show usage info if a valid email is entered
+    # Show approval + usage status
     if user_email and validate_email(user_email):
-        usage_info = get_usage(user_email)
-        used = usage_info["usage_count"]
-        remaining = usage_info["remaining"]
+        approved = is_approved(user_email)
 
-        st.caption(f"**{used}** of **{FREE_TIER_LIMIT}** free analyses used")
-        st.progress(min(used / FREE_TIER_LIMIT, 1.0))
+        if approved:
+            usage_info = get_usage(user_email)
+            used = usage_info["usage_count"]
+            remaining = usage_info["remaining"]
 
-        if 0 < remaining <= 20:
-            st.warning(f"Only {remaining} free analyses remaining.")
-        elif remaining <= 0:
-            st.error("Free tier exhausted. Contact us for continued access.")
+            st.markdown("✅ **Access approved**")
+            st.caption(f"**{used}** of **{ANALYSIS_LIMIT}** analyses used")
+            st.progress(min(used / ANALYSIS_LIMIT, 1.0))
+
+            if remaining == 0:
+                st.error("All analyses used. DM for more access.")
+            elif remaining == 1:
+                st.warning("1 analysis remaining.")
+        else:
+            st.markdown("🔒 **Access not approved**")
+            st.caption("DM on LinkedIn to request access.")
 
     st.markdown("---")
     st.markdown(
@@ -223,6 +377,31 @@ st.markdown(
     '</p>',
     unsafe_allow_html=True,
 )
+
+
+# ── Gate check: show request-access CTA if not approved ──────────────
+
+email_valid = user_email and validate_email(user_email)
+user_approved = email_valid and is_approved(user_email)
+user_has_quota = email_valid and can_use(user_email)
+
+if email_valid and not user_approved:
+    st.markdown(
+        """
+        <div class="access-box">
+            <h3>🔒 Access Required</h3>
+            <p>
+                Counterplay is currently invite-only.<br>
+                Drop me a message on LinkedIn with your email and I'll get you set up.
+            </p>
+            <a href="https://linkedin.com/in/anshul-sinha-7bb3b7101" target="_blank">
+                Message on LinkedIn
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
 
 
 # ── Input form ────────────────────────────────────────────────────────
@@ -288,8 +467,8 @@ with st.container():
             missing.append("your email address (sidebar)")
         elif not validate_email(user_email):
             missing.append("a valid email address")
-        elif not can_use(user_email):
-            missing.append("free tier quota (exhausted)")
+        elif not user_has_quota:
+            missing.append("analysis quota (all 3 used)")
         if missing:
             st.caption(f"Need: {', '.join(missing)}")
 
