@@ -211,10 +211,20 @@ def increment_usage(email: str) -> dict:
     return get_usage(email)
 
 
+def is_admin_email(email: str) -> bool:
+    """Check if the email is the admin email (unlimited access)."""
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if not admin_email:
+        return False
+    return _normalize(email) == _normalize(admin_email)
+
+
 def can_use(email: str) -> bool:
     """Return True if the email is approved AND still has quota remaining."""
     if not is_approved(email):
         return False
+    if is_admin_email(email):
+        return True
     info = get_usage(email)
     return info["usage_count"] < ANALYSIS_LIMIT
 

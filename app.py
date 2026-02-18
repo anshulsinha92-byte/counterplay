@@ -33,6 +33,7 @@ from usage import (
     can_use,
     validate_email,
     is_approved,
+    is_admin_email,
     approve_email,
     remove_approved_email,
     get_all_approved_users,
@@ -345,15 +346,19 @@ with st.sidebar:
             usage_info = get_usage(user_email)
             used = usage_info["usage_count"]
             remaining = usage_info["remaining"]
+            admin_user = is_admin_email(user_email)
 
             st.markdown("✅ **Access approved**")
-            st.caption(f"**{used}** of **{ANALYSIS_LIMIT}** analyses used")
-            st.progress(min(used / ANALYSIS_LIMIT, 1.0))
+            if admin_user:
+                st.caption(f"**{used}** analyses run — **Unlimited**")
+            else:
+                st.caption(f"**{used}** of **{ANALYSIS_LIMIT}** analyses used")
+                st.progress(min(used / ANALYSIS_LIMIT, 1.0))
 
-            if remaining == 0:
-                st.error("All analyses used. DM for more access.")
-            elif remaining == 1:
-                st.warning("1 analysis remaining.")
+                if remaining == 0:
+                    st.error("All analyses used. DM for more access.")
+                elif remaining == 1:
+                    st.warning("1 analysis remaining.")
         else:
             st.markdown("🔒 **Access not approved**")
             st.caption("DM on LinkedIn to request access.")
