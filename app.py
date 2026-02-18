@@ -8,6 +8,7 @@ Built by Anshul Sinha.
 
 import streamlit as st
 from datetime import datetime
+from html import escape as html_escape
 
 import matplotlib
 matplotlib.use("Agg")
@@ -620,7 +621,8 @@ if run_button and can_run:
                     body = (s.get("body_text") or "")[:150]
                     if len(s.get("body_text") or "") > 150:
                         body += "..."
-                    title = s.get("title") or ""
+                    body = html_escape(body) if body else ""
+                    title = html_escape(s.get("title") or "") if s.get("title") else ""
                     archetype = s.get("creative_archetype") or ""
                     funnel = s.get("funnel_stage") or ""
                     media = s.get("media_type") or ""
